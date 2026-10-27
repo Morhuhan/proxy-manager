@@ -1,0 +1,37 @@
+<Window x:Class="ProxyManager.ProcessPickerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Запущенные программы" Width="620" Height="520" MinWidth="420" MinHeight="300"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False" FontFamily="Segoe UI" FontSize="13">
+    <DockPanel Margin="12">
+        <TextBox x:Name="SearchBox" DockPanel.Dock="Top" Margin="0,0,0,8" TextChanged="SearchBox_TextChanged"
+                 ToolTip="Поиск по названию или пути" />
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button x:Name="AddButton" Content="Добавить" Style="{StaticResource AccentButton}" IsDefault="True"
+                    Click="Add_Click" Margin="0,0,8,0" IsEnabled="False" />
+            <Button Content="Отмена" IsCancel="True" />
+        </StackPanel>
+        <TextBlock DockPanel.Dock="Bottom" Style="{StaticResource Hint}" Margin="0,8,0,0"
+                   Text="Можно выбрать несколько программ (Ctrl/Shift). Системные процессы Windows скрыты." />
+        <Grid>
+            <ListBox x:Name="ProcessList" SelectionMode="Extended" SelectionChanged="ProcessList_SelectionChanged"
+                     MouseDoubleClick="ProcessList_MouseDoubleClick" BorderBrush="{StaticResource BorderBrush}"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal" Margin="2,4" ToolTip="{Binding Path}">
+                            <Image Source="{Binding Icon}" Width="24" Height="24" Margin="0,0,10,0" />
+                            <StackPanel>
+                                <TextBlock Text="{Binding Description}" FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding Path}" FontSize="11" Foreground="{StaticResource MutedBrush}"
+                                           TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                        </StackPanel>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+            <TextBlock x:Name="LoadingText" Text="Загрузка…" HorizontalAlignment="Center" VerticalAlignment="Center"
+                       Style="{StaticResource Hint}" />
+        </Grid>
+    </DockPanel>
+</Window>

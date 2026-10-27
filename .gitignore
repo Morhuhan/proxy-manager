@@ -1,0 +1,10 @@
+bin/
+obj/
+.vs/
+*.user
+TestResults/
+artifacts/
+dist/
+
+# sing-box core is downloaded by scripts/fetch-singbox.ps1
+src/ProxyManager/core/
