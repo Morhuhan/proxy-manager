@@ -131,6 +131,14 @@ public sealed class ProcessRouterTests : IDisposable
     }
 
     [Fact]
+    public void Wmi_trace_queries_are_valid()
+    {
+        // Subscribing needs admin rights, but the queries are parsed (and were rejected) on construction.
+        Assert.Equal("Win32_ProcessStartTrace", ProcessRouter.StartTraceQuery().EventClassName);
+        Assert.Equal("Win32_ProcessStopTrace", ProcessRouter.StopTraceQuery().EventClassName);
+    }
+
+    [Fact]
     public void Dispose_removes_rule_set_files()
     {
         var router = CreateRouter();

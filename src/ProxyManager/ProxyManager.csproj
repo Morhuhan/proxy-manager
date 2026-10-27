@@ -21,7 +21,7 @@
     <AssemblyTitle>Proxy Manager</AssemblyTitle>
     <Company>Proxy Manager</Company>
     <Copyright>© 2026</Copyright>
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
   </PropertyGroup>
 
   <ItemGroup>

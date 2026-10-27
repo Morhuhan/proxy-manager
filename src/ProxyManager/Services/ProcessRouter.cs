@@ -79,16 +79,20 @@ public sealed class ProcessRouter : IDisposable
     /// <summary>Starts following process creation and exit.</summary>
     public void StartWatching()
     {
-        _startWatcher = new ManagementEventWatcher(
-            new WqlEventQuery("SELECT ProcessID, ParentProcessID FROM Win32_ProcessStartTrace"));
+        _startWatcher = new ManagementEventWatcher(StartTraceQuery());
         _startWatcher.EventArrived += (_, e) => Guard(() =>
             HandleStart(Convert.ToInt32(e.NewEvent["ProcessID"]), Convert.ToInt32(e.NewEvent["ParentProcessID"])));
-        _stopWatcher = new ManagementEventWatcher(
-            new WqlEventQuery("SELECT ProcessID FROM Win32_ProcessStopTrace"));
+        _stopWatcher = new ManagementEventWatcher(StopTraceQuery());
         _stopWatcher.EventArrived += (_, e) => Guard(() => HandleStop(Convert.ToInt32(e.NewEvent["ProcessID"])));
         _startWatcher.Start();
         _stopWatcher.Start();
     }
+
+    // WqlEventQuery's parser rejects property lists ("SELECT ProcessID, ... FROM") with
+    // "Invalid parameter", so select everything.
+    internal static WqlEventQuery StartTraceQuery() => new("SELECT * FROM Win32_ProcessStartTrace");
+
+    internal static WqlEventQuery StopTraceQuery() => new("SELECT * FROM Win32_ProcessStopTrace");
 
     /// <summary>Proxy that sing-box will pick for a process, mirroring the route rule order; null = direct.</summary>
     public string? ExpectedProxyId(string processPath)
@@ -205,7 +209,7 @@ public sealed class ProcessRouter : IDisposable
             }
             catch (IOException e)
             {
-                Log?.Invoke($"Не удалось обновить список программ для «{proxy.DisplayName}»: {e.Message}");
+                Log?.Invoke($"РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ СЃРїРёСЃРѕРє РїСЂРѕРіСЂР°РјРј РґР»СЏ В«{proxy.DisplayName}В»: {e.Message}");
                 continue;
             }
             _written[proxy.Id] = content;
@@ -220,7 +224,7 @@ public sealed class ProcessRouter : IDisposable
         var current = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
         var previous = _childPaths.GetValueOrDefault(proxy.Id) ?? [];
         foreach (var path in current.Where(p => !previous.Contains(p)))
-            Log?.Invoke($"Дочерний процесс {Path.GetFileName(path)} → «{proxy.DisplayName}»");
+            Log?.Invoke($"Р”РѕС‡РµСЂРЅРёР№ РїСЂРѕС†РµСЃСЃ {Path.GetFileName(path)} в†’ В«{proxy.DisplayName}В»");
         _childPaths[proxy.Id] = current;
     }
 
@@ -233,7 +237,7 @@ public sealed class ProcessRouter : IDisposable
         catch (Exception e)
         {
             // Runs on a WMI thread: an exception here would take the whole app down.
-            Log?.Invoke("Ошибка отслеживания процессов: " + e.Message);
+            Log?.Invoke("РћС€РёР±РєР° РѕС‚СЃР»РµР¶РёРІР°РЅРёСЏ РїСЂРѕС†РµСЃСЃРѕРІ: " + e.Message);
         }
     }
 

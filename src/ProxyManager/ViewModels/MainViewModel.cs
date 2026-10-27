@@ -270,7 +270,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         catch (Exception e) when (e is InvalidOperationException or IOException or Win32Exception or ManagementException)
         {
             StopRouting();
-            AppendLog(e.Message);
+            // The message alone ("Invalid parameter") doesn't say which step failed.
+            CrashLog.Write(e, "Start");
+            AppendLog($"{e.Message} ({e.GetType().Name}; подробности в {CrashLog.FilePath})");
             ErrorText = e.Message;
             State = CoreState.Failed;
         }
