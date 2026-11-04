@@ -89,7 +89,9 @@ public static class SingBoxConfigBuilder
 
         var config = new JsonObject
         {
-            ["log"] = new JsonObject { ["level"] = "info", ["timestamp"] = true },
+            // "info" logs every connection of every program (thousands of lines a minute), burying the
+            // errors that matter; the connection list comes from the clash API anyway.
+            ["log"] = new JsonObject { ["level"] = "warn", ["timestamp"] = true },
             ["dns"] = new JsonObject
             {
                 ["servers"] = new JsonArray { new JsonObject { ["type"] = "local", ["tag"] = "local" } },

@@ -21,6 +21,9 @@ public sealed partial class SingBoxService(string workDirectory) : IDisposable
     private readonly JobObject _job = new();
     private Process? _process;
     private CoreState _state;
+    // Last FATAL/ERROR messages from the core, so a startup failure can say why.
+    private volatile string? _lastFatal;
+    private volatile string? _lastError;
 
     public static string CorePath { get; } = Path.Combine(AppContext.BaseDirectory, "core", "sing-box.exe");
 
@@ -56,6 +59,7 @@ public sealed partial class SingBoxService(string workDirectory) : IDisposable
         await File.WriteAllTextAsync(ConfigPath, config);
 
         State = CoreState.Starting;
+        _lastFatal = _lastError = null;
         var process = new Process
         {
             StartInfo = new ProcessStartInfo(CorePath)
@@ -83,12 +87,17 @@ public sealed partial class SingBoxService(string workDirectory) : IDisposable
         await Task.WhenAny(process.WaitForExitAsync(), Task.Delay(StartupGrace));
         if (process.HasExited)
         {
+            // Drain the redirected output so the final FATAL line is seen.
+            await process.WaitForExitAsync();
             var exitCode = process.ExitCode;
             _process = null;
             process.Dispose();
             DeleteConfig();
             State = CoreState.Failed;
-            throw new InvalidOperationException($"sing-box завершился при запуске (код {exitCode}). Подробности в журнале.");
+            var reason = _lastFatal ?? _lastError;
+            throw new InvalidOperationException(reason is null
+                ? $"sing-box завершился при запуске (код {exitCode}). Подробности в журнале."
+                : $"sing-box завершился при запуске (код {exitCode}): {reason}");
         }
         State = CoreState.Running;
         // The config holds proxy passwords in plain text; sing-box has read it by now.
@@ -123,7 +132,15 @@ public sealed partial class SingBoxService(string workDirectory) : IDisposable
     private void OnLine(string? line)
     {
         if (string.IsNullOrWhiteSpace(line)) return;
-        LogReceived?.Invoke(AnsiEscape().Replace(line, ""));
+        line = AnsiEscape().Replace(line, "");
+        if (FailureLine().Match(line) is { Success: true } match)
+        {
+            if (match.Groups["level"].Value == "FATAL")
+                _lastFatal = match.Groups["message"].Value;
+            else
+                _lastError = match.Groups["message"].Value;
+        }
+        LogReceived?.Invoke(line);
     }
 
     /// <summary>A sing-box left over from a previous run would hold the TUN adapter name.</summary>
@@ -171,4 +188,8 @@ public sealed partial class SingBoxService(string workDirectory) : IDisposable
 
     [GeneratedRegex(@"\x1B\[[0-9;]*m")]
     private static partial Regex AnsiEscape();
+
+    // "FATAL[0000] start service: ..." or "+0300 2026-10-28 20:52:20 ERROR [123 5.0s] connection: ..."
+    [GeneratedRegex(@"\b(?<level>FATAL|ERROR)\b(?:\[\d+\])?\s*(?:\[[^\]]*\]\s*)?(?<message>.+)$")]
+    private static partial Regex FailureLine();
 }

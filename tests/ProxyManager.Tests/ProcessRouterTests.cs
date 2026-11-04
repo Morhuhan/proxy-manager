@@ -131,6 +131,41 @@ public sealed class ProcessRouterTests : IDisposable
     }
 
     [Fact]
+    public void Exe_also_running_outside_the_tree_is_not_routed()
+    {
+        // The user's own Chrome, and a Chrome that Playwright started from inside VS Code.
+        _system[2] = (1, @"C:\Chrome\chrome.exe");
+        _system[13] = (12, @"C:\Chrome\chrome.exe");
+        using var router = CreateRouter();
+        var log = new List<string>();
+        router.Log += log.Add;
+
+        router.Update([Rule("Code.exe", _a)]);
+
+        Assert.Equal([@"C:\ext\claude.exe", @"C:\Git\bin\bash.exe"], Paths(_a));
+        Assert.Null(router.ExpectedProxyId(@"C:\Chrome\chrome.exe"));
+        Assert.Contains(log, l => l.Contains("chrome.exe") && l.Contains("напрямую"));
+    }
+
+    [Fact]
+    public void Child_exe_leaves_the_list_while_a_separate_copy_runs()
+    {
+        _system[13] = (12, @"C:\Chrome\chrome.exe");
+        using var router = CreateRouter();
+        router.Update([Rule("Code.exe", _a)]);
+        Assert.Contains(@"C:\Chrome\chrome.exe", Paths(_a));
+
+        // The user opens their own browser.
+        _system[60] = (1, @"C:\Chrome\chrome.exe");
+        router.HandleStart(60, 1);
+        Assert.DoesNotContain(@"C:\Chrome\chrome.exe", Paths(_a));
+
+        // ...and closes it again.
+        router.HandleStop(60);
+        Assert.Contains(@"C:\Chrome\chrome.exe", Paths(_a));
+    }
+
+    [Fact]
     public void Wmi_trace_queries_are_valid()
     {
         // Subscribing needs admin rights, but the queries are parsed (and were rejected) on construction.

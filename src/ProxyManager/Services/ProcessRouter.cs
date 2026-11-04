@@ -10,6 +10,11 @@ public sealed record ProcessEntry(int Pid, int ParentPid, string Name);
 /// the processes those programs launch. Programs are listed by name; their descendants (when the
 /// rule includes children) by full path while they are running.
 /// </summary>
+/// <remarks>
+/// sing-box can only match a path, not a process, so a descendant's path is listed only while every
+/// running copy of that exe is a tracked descendant. Otherwise e.g. a Chrome started by Playwright
+/// from VS Code would put the user's own Chrome behind the proxy too.
+/// </remarks>
 public sealed class ProcessRouter : IDisposable
 {
     // Guards the ancestor walk against parent-PID cycles caused by PID reuse.
@@ -23,8 +28,11 @@ public sealed class ProcessRouter : IDisposable
 
     private readonly object _lock = new();
     private readonly Dictionary<int, Tracked> _tracked = [];
+    // Running processes outside the tracked trees: pid -> exe path.
+    private readonly Dictionary<int, string> _others = [];
     private readonly Dictionary<string, string> _written = [];
     private readonly Dictionary<string, HashSet<string>> _childPaths = [];
+    private readonly HashSet<string> _sharedReported = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, ResolvedRule> _rules = new(StringComparer.OrdinalIgnoreCase);
     private ManagementEventWatcher? _startWatcher;
     private ManagementEventWatcher? _stopWatcher;
@@ -116,9 +124,8 @@ public sealed class ProcessRouter : IDisposable
         bool changed;
         lock (_lock)
         {
-            if (_disposed) return;
+            if (_disposed || _rules.Count == 0) return;
             var parent = _tracked.GetValueOrDefault(parentPid) is { Propagates: true } p ? p : null;
-            if (parent is null && _rules.Count == 0) return;
 
             // Event process names are truncated to 15 characters, so look up the real path.
             var path = _getPath(pid);
@@ -129,9 +136,16 @@ public sealed class ProcessRouter : IDisposable
                 _tracked[pid] = new Tracked(rule.Proxy.Id, null, rule.IncludeChildren);
                 return;
             }
-            if (parent is null || _ownPaths.Contains(path)) return;
-
-            _tracked[pid] = new Tracked(parent.ProxyId, path, true);
+            if (parent is null || _ownPaths.Contains(path))
+            {
+                _others[pid] = path;
+                // A separate copy of a listed child exe: the path has to come off the list.
+                if (!IsListedChildPath(path)) return;
+            }
+            else
+            {
+                _tracked[pid] = new Tracked(parent.ProxyId, path, true);
+            }
             changed = Flush();
         }
         if (changed) Changed?.Invoke();
@@ -142,15 +156,30 @@ public sealed class ProcessRouter : IDisposable
         bool changed;
         lock (_lock)
         {
-            if (_disposed || !_tracked.Remove(pid, out var tracked) || tracked.Path is null) return;
+            if (_disposed) return;
+            if (_tracked.Remove(pid, out var tracked))
+            {
+                if (tracked.Path is null) return;
+            }
+            else if (!_others.Remove(pid, out var path) || !IsTrackedChildPath(path))
+            {
+                return;
+            }
+            // Either a listed child exited, or the last outside copy of a child exe did.
             changed = Flush();
         }
         if (changed) Changed?.Invoke();
     }
 
+    private bool IsListedChildPath(string path) => _childPaths.Values.Any(paths => paths.Contains(path));
+
+    private bool IsTrackedChildPath(string path) =>
+        _tracked.Values.Any(t => string.Equals(t.Path, path, StringComparison.OrdinalIgnoreCase));
+
     private void Rebuild(IReadOnlyList<ProcessEntry> processes)
     {
         _tracked.Clear();
+        _others.Clear();
         var byPid = new Dictionary<int, ProcessEntry>();
         foreach (var p in processes)
             byPid.TryAdd(p.Pid, p);
@@ -158,6 +187,13 @@ public sealed class ProcessRouter : IDisposable
         var memo = new Dictionary<int, Tracked?>();
         foreach (var p in processes)
             Classify(p, byPid, memo, 0);
+
+        // Paths of everything else, to spot exes shared with the tracked trees.
+        foreach (var p in processes)
+        {
+            if (!_tracked.ContainsKey(p.Pid) && _getPath(p.Pid) is { } path)
+                _others[p.Pid] = path;
+        }
     }
 
     private Tracked? Classify(ProcessEntry process, Dictionary<int, ProcessEntry> byPid, Dictionary<int, Tracked?> memo, int depth)
@@ -187,17 +223,20 @@ public sealed class ProcessRouter : IDisposable
     /// <summary>Rewrites the rule-set files whose content changed. Must hold the lock.</summary>
     private bool Flush()
     {
+        var shared = new HashSet<string>(_others.Values, StringComparer.OrdinalIgnoreCase);
         var changed = false;
         foreach (var proxy in _proxies)
         {
             var names = _rules.Values.Where(r => r.Proxy.Id == proxy.Id).Select(r => r.ProcessName).ToList();
             // Children that are themselves listed by name are covered by that rule.
-            var paths = _tracked.Values
+            var candidates = _tracked.Values
                 .Where(t => t.ProxyId == proxy.Id && t.Path is not null && !_rules.ContainsKey(Path.GetFileName(t.Path)))
                 .Select(t => t.Path!)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Order(StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            var paths = candidates.Where(p => !shared.Contains(p)).ToList();
+            ReportShared(proxy, candidates.Where(shared.Contains));
 
             var content = SingBoxConfigBuilder.BuildRuleSet(names, paths);
             if (_written.TryGetValue(proxy.Id, out var previous) && previous == content) continue;
@@ -209,7 +248,7 @@ public sealed class ProcessRouter : IDisposable
             }
             catch (IOException e)
             {
-                Log?.Invoke($"РќРµ СѓРґР°Р»РѕСЃСЊ РѕР±РЅРѕРІРёС‚СЊ СЃРїРёСЃРѕРє РїСЂРѕРіСЂР°РјРј РґР»СЏ В«{proxy.DisplayName}В»: {e.Message}");
+                Log?.Invoke($"Не удалось обновить список программ для «{proxy.DisplayName}»: {e.Message}");
                 continue;
             }
             _written[proxy.Id] = content;
@@ -224,8 +263,17 @@ public sealed class ProcessRouter : IDisposable
         var current = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
         var previous = _childPaths.GetValueOrDefault(proxy.Id) ?? [];
         foreach (var path in current.Where(p => !previous.Contains(p)))
-            Log?.Invoke($"Р”РѕС‡РµСЂРЅРёР№ РїСЂРѕС†РµСЃСЃ {Path.GetFileName(path)} в†’ В«{proxy.DisplayName}В»");
+            Log?.Invoke($"Дочерний процесс {Path.GetFileName(path)} → «{proxy.DisplayName}»");
         _childPaths[proxy.Id] = current;
+    }
+
+    private void ReportShared(ProxyServer proxy, IEnumerable<string> paths)
+    {
+        foreach (var path in paths.Where(_sharedReported.Add))
+        {
+            Log?.Invoke($"Дочерний процесс {Path.GetFileName(path)} идёт напрямую, а не через «{proxy.DisplayName}»: " +
+                        "этот же exe запущен и отдельно, и через прокси пошли бы все его копии");
+        }
     }
 
     private void Guard(Action action)
@@ -237,7 +285,7 @@ public sealed class ProcessRouter : IDisposable
         catch (Exception e)
         {
             // Runs on a WMI thread: an exception here would take the whole app down.
-            Log?.Invoke("РћС€РёР±РєР° РѕС‚СЃР»РµР¶РёРІР°РЅРёСЏ РїСЂРѕС†РµСЃСЃРѕРІ: " + e.Message);
+            Log?.Invoke("Ошибка отслеживания процессов: " + e.Message);
         }
     }
 
