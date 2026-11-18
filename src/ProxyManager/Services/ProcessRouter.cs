@@ -20,6 +20,19 @@ public sealed class ProcessRouter : IDisposable
     // Guards the ancestor walk against parent-PID cycles caused by PID reuse.
     private const int MaxDepth = 64;
 
+    // Programs that are the user's own apps even when started from a tracked tree (a link clicked
+    // in VS Code opens the browser as its child). Listing them would route the whole app and block
+    // its UDP. They can still be routed with a rule of their own.
+    private static readonly HashSet<string> StandaloneApps = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "vivaldi.exe", "browser.exe",
+        "iexplore.exe", "Discord.exe", "Telegram.exe", "slack.exe", "Teams.exe", "ms-teams.exe",
+        "Zoom.exe", "Skype.exe", "WhatsApp.exe", "Spotify.exe", "steam.exe", "explorer.exe",
+    };
+
+    private static readonly string WindowsDirectory =
+        Environment.GetFolderPath(Environment.SpecialFolder.Windows).TrimEnd('\\') + "\\";
+
     private readonly string _directory;
     private readonly IReadOnlyList<ProxyServer> _proxies;
     private readonly Func<IReadOnlyList<ProcessEntry>> _snapshot;
@@ -171,6 +184,15 @@ public sealed class ProcessRouter : IDisposable
         if (changed) Changed?.Invoke();
     }
 
+    /// <summary>
+    /// Children that are tracked (their own children are still routed) but never listed: system
+    /// tools from the Windows folder (powershell, cmd, ping, conhost — shared by everything) and
+    /// standalone apps such as browsers.
+    /// </summary>
+    internal static bool IsNeverInherited(string path) =>
+        path.StartsWith(WindowsDirectory, StringComparison.OrdinalIgnoreCase)
+        || StandaloneApps.Contains(Path.GetFileName(path));
+
     private bool IsListedChildPath(string path) => _childPaths.Values.Any(paths => paths.Contains(path));
 
     private bool IsTrackedChildPath(string path) =>
@@ -230,7 +252,8 @@ public sealed class ProcessRouter : IDisposable
             var names = _rules.Values.Where(r => r.Proxy.Id == proxy.Id).Select(r => r.ProcessName).ToList();
             // Children that are themselves listed by name are covered by that rule.
             var candidates = _tracked.Values
-                .Where(t => t.ProxyId == proxy.Id && t.Path is not null && !_rules.ContainsKey(Path.GetFileName(t.Path)))
+                .Where(t => t.ProxyId == proxy.Id && t.Path is not null && !_rules.ContainsKey(Path.GetFileName(t.Path))
+                            && !IsNeverInherited(t.Path))
                 .Select(t => t.Path!)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Order(StringComparer.OrdinalIgnoreCase)

@@ -133,9 +133,9 @@ public sealed class ProcessRouterTests : IDisposable
     [Fact]
     public void Exe_also_running_outside_the_tree_is_not_routed()
     {
-        // The user's own Chrome, and a Chrome that Playwright started from inside VS Code.
-        _system[2] = (1, @"C:\Chrome\chrome.exe");
-        _system[13] = (12, @"C:\Chrome\chrome.exe");
+        // A node.exe of the user's own, and one started from inside VS Code.
+        _system[2] = (1, @"C:\node\node.exe");
+        _system[13] = (12, @"C:\node\node.exe");
         using var router = CreateRouter();
         var log = new List<string>();
         router.Log += log.Add;
@@ -143,26 +143,66 @@ public sealed class ProcessRouterTests : IDisposable
         router.Update([Rule("Code.exe", _a)]);
 
         Assert.Equal([@"C:\ext\claude.exe", @"C:\Git\bin\bash.exe"], Paths(_a));
-        Assert.Null(router.ExpectedProxyId(@"C:\Chrome\chrome.exe"));
-        Assert.Contains(log, l => l.Contains("chrome.exe") && l.Contains("напрямую"));
+        Assert.Null(router.ExpectedProxyId(@"C:\node\node.exe"));
+        Assert.Contains(log, l => l.Contains("node.exe") && l.Contains("напрямую"));
     }
 
     [Fact]
     public void Child_exe_leaves_the_list_while_a_separate_copy_runs()
     {
-        _system[13] = (12, @"C:\Chrome\chrome.exe");
+        _system[13] = (12, @"C:\node\node.exe");
         using var router = CreateRouter();
         router.Update([Rule("Code.exe", _a)]);
-        Assert.Contains(@"C:\Chrome\chrome.exe", Paths(_a));
+        Assert.Contains(@"C:\node\node.exe", Paths(_a));
 
-        // The user opens their own browser.
-        _system[60] = (1, @"C:\Chrome\chrome.exe");
+        // The user starts a node.exe of their own.
+        _system[60] = (1, @"C:\node\node.exe");
         router.HandleStart(60, 1);
-        Assert.DoesNotContain(@"C:\Chrome\chrome.exe", Paths(_a));
+        Assert.DoesNotContain(@"C:\node\node.exe", Paths(_a));
 
-        // ...and closes it again.
+        // ...and it exits again.
         router.HandleStop(60);
-        Assert.Contains(@"C:\Chrome\chrome.exe", Paths(_a));
+        Assert.Contains(@"C:\node\node.exe", Paths(_a));
+    }
+
+    [Fact]
+    public void Browser_opened_from_a_tracked_program_is_not_routed()
+    {
+        // Chrome wasn't running; a link clicked in VS Code starts it as a child of Code.exe.
+        _system[14] = (10, @"C:\Program Files\Google\Chrome\Application\chrome.exe");
+        _system[15] = (14, @"C:\Program Files\Google\Chrome\Application\chrome.exe");
+        using var router = CreateRouter();
+
+        router.Update([Rule("Code.exe", _a)]);
+
+        Assert.DoesNotContain(Paths(_a), p => p.EndsWith("chrome.exe"));
+        Assert.Null(router.ExpectedProxyId(@"C:\Program Files\Google\Chrome\Application\chrome.exe"));
+    }
+
+    [Fact]
+    public void Windows_tools_are_not_listed_but_their_children_are()
+    {
+        var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        var shell = Path.Combine(windows, @"System32\WindowsPowerShell\v1.0\powershell.exe");
+        var ping = Path.Combine(windows, @"System32\PING.EXE");
+        _system[16] = (10, shell);
+        _system[17] = (16, @"C:\Git\cmd\git.exe");
+        _system[18] = (10, ping);
+        using var router = CreateRouter();
+        var changes = 0;
+
+        router.Update([Rule("Code.exe", _a)]);
+        router.Changed += () => changes++;
+
+        Assert.Contains(@"C:\Git\cmd\git.exe", Paths(_a));
+        Assert.DoesNotContain(shell, Paths(_a));
+        Assert.DoesNotContain(ping, Paths(_a));
+
+        // A VS Code extension pinging every few seconds must not churn the rule-set.
+        _system[19] = (10, ping);
+        router.HandleStart(19, 10);
+        router.HandleStop(19);
+        Assert.Equal(0, changes);
     }
 
     [Fact]
